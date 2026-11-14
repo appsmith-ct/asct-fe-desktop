@@ -22,6 +22,16 @@ interface ChatTurnMessage {
 
 export type ChatConnectionStatus = 'connecting' | 'open' | 'closed'
 
+/** A question frame tagged with a sequence number so a repeated question (the intake agent
+ * asking the same clarifying question twice in a row is a legitimate, not-infrequent outcome)
+ * still looks like a new value to React — a plain string would compare equal to the previous
+ * one and the state update would be dropped, silently eating a real server turn.
+ */
+export interface ChatQuestion {
+  text: string
+  seq: number
+}
+
 /** `WS /projects/{id}/chat` (spec section 9) — one question/answer turn per message, matching
  * `appsmith.api.routers.chat.chat_ws` exactly: the server always sends a `{kind, text, brief}`
  * frame after connecting and after every answer, settling into `kind: "ready"` once the brief is
@@ -29,7 +39,7 @@ export type ChatConnectionStatus = 'connecting' | 'open' | 'closed'
  */
 export function useChatSocket(projectId: string | null) {
   const [status, setStatus] = useState<ChatConnectionStatus>('connecting')
-  const [question, setQuestion] = useState<string>('')
+  const [question, setQuestion] = useState<ChatQuestion | null>(null)
   const [brief, setBrief] = useState<ProjectBriefDraft | null>(null)
   const [readyToBuild, setReadyToBuild] = useState(false)
   const socketRef = useRef<WebSocket | null>(null)
@@ -38,12 +48,13 @@ export function useChatSocket(projectId: string | null) {
     if (!projectId) return undefined
 
     setStatus('connecting')
-    setQuestion('')
+    setQuestion(null)
     setBrief(null)
     setReadyToBuild(false)
 
     const socket = new WebSocket(engineWsUrl(`/projects/${projectId}/chat`))
     socketRef.current = socket
+    let seq = 0
 
     socket.onopen = () => setStatus('open')
     socket.onclose = () => setStatus('closed')
@@ -53,7 +64,8 @@ export function useChatSocket(projectId: string | null) {
         setReadyToBuild(true)
         setBrief(message.brief)
       } else {
-        setQuestion(message.text)
+        seq += 1
+        setQuestion({ text: message.text, seq })
         setBrief(message.brief ?? null)
       }
     }

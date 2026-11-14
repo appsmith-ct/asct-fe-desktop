@@ -19,15 +19,17 @@ export default function ChatPage() {
   const { status, question, brief, readyToBuild, sendAnswer } = useChatSocket(projectId ?? null)
   const [turns, setTurns] = useState<Turn[]>([])
   const [draft, setDraft] = useState('')
-  const lastQuestion = useRef<string>('')
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (question && question !== lastQuestion.current) {
-      lastQuestion.current = question
-      setTurns((prev) => [...prev, { role: 'assistant', text: question }])
+    if (question) {
+      setTurns((prev) => [...prev, { role: 'assistant', text: question.text }])
     }
-  }, [question])
+    // `question` is a fresh { text, seq } object per server message, so this must depend on its
+    // identity (via seq), not just its presence — two consecutive questions with the same text
+    // (the agent re-asking the same clarifying question) are still two distinct turns to render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [question?.seq])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
