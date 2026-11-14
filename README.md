@@ -27,11 +27,24 @@ pnpm dev
 Runs against a local `asct-be-engine` instance (see that repo's README) — until M8 this is a plain local web
 app in the browser; the Tauri shell (`src-tauri/`) is added last.
 
-## Build, lint
+## Build, lint, test
 
 ```bash
-pnpm build
-pnpm lint
+pnpm build       # tsc -b && vite build
+pnpm lint        # oxlint
+pnpm run e2e     # Playwright acceptance smoke test — starts its own engine + UI instances
+```
+
+To regenerate the TypeScript API client after the engine's OpenAPI document changes:
+
+```bash
+pnpm run gen-api  # reads ../docs/api/openapi.json, writes src/api/generated/schema.d.ts
+```
+
+For a visual feedback loop while building a screen (not a substitute for `pnpm run e2e`):
+
+```bash
+node scripts/screenshot.mjs /projects my-screenshot   # against a running `pnpm dev`
 ```
 
 ## Layout
@@ -39,6 +52,8 @@ pnpm lint
 ```
 src/            React app
 src-tauri/      Tauri v2 shell (placeholder until M8)
+e2e/            Playwright acceptance test (playwright.config.ts starts the engine + UI itself)
+scripts/        Dev-loop helpers (screenshot.mjs, interact-and-shot.mjs)
 ```
 
 Current status: see `asct-app/docs/PROGRESS.md`.
