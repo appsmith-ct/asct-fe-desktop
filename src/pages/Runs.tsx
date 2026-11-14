@@ -26,6 +26,7 @@ type LLMCall = {
   latency_ms: number
   validation_outcome: string
   retry_index: number
+  reasoning?: string | null
 }
 
 type RunMetrics = {
@@ -172,6 +173,14 @@ export default function RunsPage() {
           </DialogHeader>
           {inspecting && (
             <div className="max-h-[60vh] space-y-3 overflow-y-auto text-sm">
+              {inspecting.reasoning && (
+                <div>
+                  <div className="font-medium text-muted-foreground">Reasoning</div>
+                  <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
+                    {inspecting.reasoning}
+                  </pre>
+                </div>
+              )}
               <div>
                 <div className="font-medium text-muted-foreground">Prompt</div>
                 <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">

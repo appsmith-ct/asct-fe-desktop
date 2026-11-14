@@ -366,6 +366,8 @@ export interface components {
             validation_outcome: string;
             /** Retry Index */
             retry_index: number;
+            /** Reasoning */
+            reasoning?: string | null;
         };
         /** Limits */
         Limits: {

@@ -36,12 +36,17 @@ test('chat, gate approval and run inspection', async ({ page }, testInfo) => {
   await page.getByPlaceholder('Type your answer…').fill('a to-do list app')
   await page.getByPlaceholder('Type your answer…').press('Enter')
 
-  await expect(page.getByText('Anything else before we start building?')).toBeVisible()
+  // `exact: true` matters here, not just style: the Observability panel (below the chat) now
+  // shows the raw prompt/response for this same turn, which contains this question text and
+  // the word "goal" as substrings -- a loose getByText would match both and fail as ambiguous.
+  await expect(
+    page.getByText('Anything else before we start building?', { exact: true }),
+  ).toBeVisible()
   await page.getByPlaceholder('Type your answer…').fill('nothing else')
   await page.getByPlaceholder('Type your answer…').press('Enter')
 
   await expect(page.getByText('Brief is ready to build.')).toBeVisible()
-  await expect(page.getByText('Goal')).toBeVisible()
+  await expect(page.getByText('Goal', { exact: true })).toBeVisible()
 
   // -- Start the run and reach the after_sa gate ------------------------------------------
   await page.getByRole('button', { name: 'Start build' }).click()
