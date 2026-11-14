@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router'
 import { api } from '@/api/client'
 import { useChatSocket } from '@/api/useChatSocket'
 import { CallObservability, type ObservedCall } from '@/components/CallObservability'
+import { LiveTurn } from '@/components/LiveTurn'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -17,7 +18,17 @@ interface Turn {
 export default function ChatPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
-  const { status, question, brief, readyToBuild, sendAnswer } = useChatSocket(projectId ?? null)
+  const {
+    status,
+    question,
+    brief,
+    readyToBuild,
+    sendAnswer,
+    isThinking,
+    liveReasoning,
+    liveContent,
+    turnStartedAt,
+  } = useChatSocket(projectId ?? null)
   const [turns, setTurns] = useState<Turn[]>([])
   const [draft, setDraft] = useState('')
   const [calls, setCalls] = useState<ObservedCall[]>([])
@@ -49,10 +60,10 @@ export default function ChatPage() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [turns])
+  }, [turns, liveReasoning, liveContent])
 
   function submit() {
-    if (!draft.trim() || readyToBuild) return
+    if (!draft.trim() || readyToBuild || isThinking) return
     setTurns((prev) => [...prev, { role: 'user', text: draft }])
     sendAnswer(draft)
     setDraft('')
@@ -97,6 +108,9 @@ export default function ChatPage() {
                 </div>
               </div>
             ))}
+            {isThinking && (
+              <LiveTurn reasoning={liveReasoning} content={liveContent} startedAt={turnStartedAt} />
+            )}
             {readyToBuild && (
               <div className="rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
                 Brief is ready to build.
@@ -106,14 +120,20 @@ export default function ChatPage() {
           <div className="flex items-center gap-2 border-t p-3">
             <Input
               value={draft}
-              disabled={readyToBuild || status !== 'open'}
+              disabled={readyToBuild || isThinking || status !== 'open'}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') submit()
               }}
-              placeholder={readyToBuild ? 'Brief frozen — start the build below' : 'Type your answer…'}
+              placeholder={
+                readyToBuild
+                  ? 'Brief frozen — start the build below'
+                  : isThinking
+                    ? 'Waiting for a response…'
+                    : 'Type your answer…'
+              }
             />
-            <Button size="icon" onClick={submit} disabled={readyToBuild || status !== 'open'}>
+            <Button size="icon" onClick={submit} disabled={readyToBuild || isThinking || status !== 'open'}>
               <SendIcon className="size-4" />
             </Button>
           </div>
