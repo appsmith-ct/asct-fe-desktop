@@ -109,3 +109,62 @@ test('chat, gate approval and run inspection', async ({ page }, testInfo) => {
   await expect(page.getByText('MilestoneDemo')).toBeVisible()
   await expect(page.getByText('ChangeRequest')).toBeVisible()
 })
+
+/** ISSUE-1: the chat transcript has to survive a reload and a trip to another screen.
+ *
+ * It was never actually lost — the engine checkpoints the intake conversation per project — but
+ * the transcript lived only in React state, so a refresh showed an empty chat above a
+ * conversation that was entirely intact. Separate from the main smoke test because it needs its
+ * own project at a half-finished point, before the brief freezes.
+ */
+test('the chat transcript survives a reload and navigation', async ({ page }, testInfo) => {
+  const projectName = `chat-persist-${Date.now()}`
+  const workspacePath = testInfo.outputPath(projectName)
+
+  await page.goto('/projects')
+  await page.getByRole('button', { name: 'New project' }).click()
+  await page.getByPlaceholder('A URL shortener').fill(projectName)
+  await page.getByPlaceholder(/leave blank to use the default/).fill(workspacePath)
+  await page.getByRole('button', { name: 'Create' }).click()
+  await page.waitForURL(/\/projects\/[^/]+\/chat/)
+
+  await expect(page.getByText('What would you like to build?')).toBeVisible()
+  await page.getByPlaceholder('Type your answer…').fill('a to-do list app')
+  await page.getByPlaceholder('Type your answer…').press('Enter')
+
+  // One full turn: the user's own message and the agent's reply are both on screen.
+  await expect(page.getByText('a to-do list app', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('Anything else before we start building?', { exact: true }),
+  ).toBeVisible()
+
+  // --- a reload -------------------------------------------------------------------------
+  await page.reload()
+  await expect(page.getByText('a to-do list app', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('Anything else before we start building?', { exact: true }),
+  ).toBeVisible()
+
+  // --- and a trip to another screen and back --------------------------------------------
+  await page.getByRole('link', { name: 'Artifacts' }).click()
+  await page.waitForURL(/\/artifacts/)
+  await page.getByRole('link', { name: 'Chat' }).click()
+  await page.waitForURL(/\/chat/)
+  await expect(page.getByText('a to-do list app', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('Anything else before we start building?', { exact: true }),
+  ).toBeVisible()
+
+  // The conversation is genuinely resumed, not restarted: answering carries on from where it
+  // left off, with the earlier turns still above the new one.
+  //
+  // Deliberately not asserting that this reaches "Brief is ready to build." — ScenarioFakeChatModel
+  // decides readiness from a per-instance call counter, and the engine builds one chat model per
+  // WS connection, so a reload resets that counter and the fake asks again. The engine's own
+  // state is resumed correctly (the replayed transcript above is proof); it's the scripted fake
+  // that can't model "second turn" across a reconnect.
+  await page.getByPlaceholder('Type your answer…').fill('nothing else')
+  await page.getByPlaceholder('Type your answer…').press('Enter')
+  await expect(page.getByText('nothing else', { exact: true })).toBeVisible()
+  await expect(page.getByText('a to-do list app', { exact: true })).toBeVisible()
+})

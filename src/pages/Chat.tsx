@@ -10,16 +10,12 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 
-interface Turn {
-  role: 'assistant' | 'user'
-  text: string
-}
-
 export default function ChatPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const {
     status,
+    turns,
     question,
     brief,
     readyToBuild,
@@ -29,7 +25,6 @@ export default function ChatPage() {
     liveContent,
     turnStartedAt,
   } = useChatSocket(projectId ?? null)
-  const [turns, setTurns] = useState<Turn[]>([])
   const [draft, setDraft] = useState('')
   const [calls, setCalls] = useState<ObservedCall[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -49,22 +44,11 @@ export default function ChatPage() {
   }, [refreshCalls, question?.seq, readyToBuild])
 
   useEffect(() => {
-    if (question) {
-      setTurns((prev) => [...prev, { role: 'assistant', text: question.text }])
-    }
-    // `question` is a fresh { text, seq } object per server message, so this must depend on its
-    // identity (via seq), not just its presence — two consecutive questions with the same text
-    // (the agent re-asking the same clarifying question) are still two distinct turns to render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [question?.seq])
-
-  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [turns, liveReasoning, liveContent])
 
   function submit() {
     if (!draft.trim() || readyToBuild || isThinking) return
-    setTurns((prev) => [...prev, { role: 'user', text: draft }])
     sendAnswer(draft)
     setDraft('')
   }
