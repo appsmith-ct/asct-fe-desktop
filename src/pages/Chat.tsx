@@ -4,10 +4,11 @@ import { useNavigate, useParams } from 'react-router'
 
 import { api } from '@/api/client'
 import { useChatSocket } from '@/api/useChatSocket'
-import { CallObservability, type ObservedCall } from '@/components/CallObservability'
+import { type ObservedCall } from '@/components/CallInspector'
 import { LiveTurn } from '@/components/LiveTurn'
+import { ObservabilityDialog } from '@/components/ObservabilityDialog'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 
 export default function ChatPage() {
@@ -27,6 +28,9 @@ export default function ChatPage() {
   } = useChatSocket(projectId ?? null)
   const [draft, setDraft] = useState('')
   const [calls, setCalls] = useState<ObservedCall[]>([])
+  const [contextWindow, setContextWindow] = useState<{ size: number; profileId: string } | null>(
+    null,
+  )
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const refreshCalls = useCallback(() => {
@@ -42,6 +46,19 @@ export default function ChatPage() {
   useEffect(() => {
     refreshCalls()
   }, [refreshCalls, question?.seq, readyToBuild])
+
+  // The context size belongs to the *profile the intake role is mapped to*, which only the
+  // settings endpoint knows — a call trace can say how many tokens went out but not what the
+  // ceiling was. Fetched once: changing a profile mid-conversation isn't a case worth polling
+  // for, and settings edits only apply from the next run anyway.
+  useEffect(() => {
+    void api.GET('/settings/models').then(({ data }) => {
+      if (!data) return
+      const profileId = data.roles['intake']?.profile
+      const profile = data.profiles.find((p) => p.id === profileId)
+      if (profile) setContextWindow({ size: profile.ctx, profileId: profile.id })
+    })
+  }, [])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -124,7 +141,7 @@ export default function ChatPage() {
         </Card>
 
         <div className="col-span-2 flex flex-col gap-4 overflow-hidden">
-          <Card className="flex max-h-[45%] flex-col overflow-hidden">
+          <Card className="flex flex-1 flex-col overflow-hidden">
             <CardHeader>
               <CardTitle className="text-sm">Project brief</CardTitle>
             </CardHeader>
@@ -148,19 +165,12 @@ export default function ChatPage() {
             </CardContent>
           </Card>
 
-          <Card className="flex flex-1 flex-col overflow-hidden">
-            <CardHeader>
-              <CardTitle className="text-sm">Observability</CardTitle>
-              <CardDescription>
-                What the model actually did on each turn — its hidden reasoning (where the
-                profile exposes one) and the raw prompt/response. Intake doesn't call tools, so
-                there's nothing to show there.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="overflow-y-auto">
-              <CallObservability calls={calls} />
-            </CardContent>
-          </Card>
+          <ObservabilityDialog
+            calls={calls}
+            contextWindow={contextWindow ?? undefined}
+            title="Intake model calls"
+            description="Every call this conversation has made, newest first — the model's hidden reasoning where the profile exposes one, and the raw prompt and response, each timestamped."
+          />
         </div>
       </div>
     </div>

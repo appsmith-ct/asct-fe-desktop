@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { api } from '@/api/client'
+import { CallDetail, type ObservedCall } from '@/components/CallInspector'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -14,20 +15,9 @@ import {
 } from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
-type LLMCall = {
-  node: string
-  role: string
-  profile_id: string
-  prompt_version: number
-  prompt: string
-  response: string
-  input_tokens: number
-  output_tokens: number
-  latency_ms: number
-  validation_outcome: string
-  retry_index: number
-  reasoning?: string | null
-}
+// The same shape the shared inspector renders — declared there rather than duplicated here, so
+// a field added to the engine's LLMCallSummary reaches both screens at once.
+type LLMCall = ObservedCall & { prompt_version: number }
 
 type RunMetrics = {
   run_id: string
@@ -134,6 +124,7 @@ export default function RunsPage() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>Time</TableHead>
                 <TableHead>Node</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead>Outcome</TableHead>
@@ -145,6 +136,11 @@ export default function RunsPage() {
             <TableBody>
               {calls.map((call, i) => (
                 <TableRow key={i} className="cursor-pointer" onClick={() => setInspecting(call)}>
+                  <TableCell className="font-mono text-xs tabular-nums text-muted-foreground">
+                    {call.created_at
+                      ? new Date(call.created_at).toLocaleTimeString(undefined, { hour12: false })
+                      : '--:--:--'}
+                  </TableCell>
                   <TableCell className="font-mono">{call.node}</TableCell>
                   <TableCell>{call.role}</TableCell>
                   <TableCell>
@@ -165,34 +161,15 @@ export default function RunsPage() {
       </Card>
 
       <Dialog open={inspecting !== null} onOpenChange={(open) => !open && setInspecting(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>
               {inspecting?.node} · {inspecting?.role}
             </DialogTitle>
           </DialogHeader>
           {inspecting && (
-            <div className="max-h-[60vh] space-y-3 overflow-y-auto text-sm">
-              {inspecting.reasoning && (
-                <div>
-                  <div className="font-medium text-muted-foreground">Reasoning</div>
-                  <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
-                    {inspecting.reasoning}
-                  </pre>
-                </div>
-              )}
-              <div>
-                <div className="font-medium text-muted-foreground">Prompt</div>
-                <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
-                  {inspecting.prompt}
-                </pre>
-              </div>
-              <div>
-                <div className="font-medium text-muted-foreground">Response</div>
-                <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
-                  {inspecting.response}
-                </pre>
-              </div>
+            <div className="max-h-[70vh] overflow-y-auto text-sm">
+              <CallDetail call={inspecting} />
             </div>
           )}
         </DialogContent>

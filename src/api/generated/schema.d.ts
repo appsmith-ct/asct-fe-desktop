@@ -419,6 +419,11 @@ export interface components {
             role: string;
             /** Profile Id */
             profile_id: string;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
             /** Prompt Version */
             prompt_version: number;
             /** Prompt */
@@ -537,6 +542,10 @@ export interface components {
              * @default 0.2
              */
             temperature: number;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Thinking */
+            thinking?: boolean | null;
         };
         /** ModelsSettingsRequest */
         ModelsSettingsRequest: {
