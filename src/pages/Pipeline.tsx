@@ -7,23 +7,33 @@ import {
   type NodeProps,
   Position,
   ReactFlow,
+  type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { CheckCircle2Icon, CircleDashedIcon, Loader2Icon, PlayIcon, XCircleIcon } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { api } from '@/api/client'
 import { useRunEvents } from '@/api/useRunEvents'
+import { MilestoneGate, type ChangeRequestSummary } from '@/components/MilestoneGate'
+import { MilestoneRail, type MilestoneProgress } from '@/components/MilestoneRail'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-const NODE_ORDER = ['ba', 'sa', 'build_milestone']
+// The first pass through the graph. The engine's loop also runs `ba_change` and `sa_delta` on a
+// change-request pass, but they're no-ops without an open change request and showing two
+// permanently-idle nodes would misrepresent the normal case — the loop edge back from
+// `next_milestone` is what carries the information that there *is* a cycle, and the Milestones
+// panel is where a user actually reads their progress through it.
+const NODE_ORDER = ['ba', 'sa', 'build_milestone', 'milestone_demo', 'next_milestone']
 const NODE_LABEL: Record<string, string> = {
   ba: 'Business Analyst',
   sa: 'Software Architect',
   build_milestone: 'Build milestone',
+  milestone_demo: 'Milestone demo',
+  next_milestone: 'Next milestone',
 }
 
 type Status = 'idle' | 'running' | 'success' | 'failed'
@@ -56,7 +66,12 @@ export default function PipelinePage() {
     next_gate: string | null
     error: string | null
   } | null>(null)
+  const [milestones, setMilestones] = useState<MilestoneProgress[]>([])
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [changeRequests, setChangeRequests] = useState<ChangeRequestSummary[]>([])
   const [selected, setSelected] = useState<string | null>(null)
+  const flow = useRef<ReactFlowInstance | null>(null)
+  const paneRef = useRef<HTMLDivElement>(null)
   const [calls, setCalls] = useState<
     { node: string; role: string; validation_outcome: string; retry_index: number; response: string }[]
   >([])
@@ -70,6 +85,17 @@ export default function PipelinePage() {
         next_gate: data.next_gate ?? null,
         error: data.error ?? null,
       })
+    }
+    // Polled alongside the status rather than only on change: a milestone finishing is exactly
+    // the moment this panel has to update, and that shows up as new artifacts on the engine
+    // side, not as a status transition the UI can watch for.
+    const milestonesResponse = await api.GET('/runs/{run_id}/milestones', {
+      params: { path: { run_id: projectId } },
+    })
+    if (milestonesResponse.data) {
+      setMilestones(milestonesResponse.data.milestones)
+      setCurrentIndex(milestonesResponse.data.current_index)
+      setChangeRequests(milestonesResponse.data.change_requests)
     }
   }
 
@@ -100,7 +126,17 @@ export default function PipelinePage() {
       result.ba ??= 'success'
       result.sa ??= 'success'
     }
-    if (runStatus?.status === 'done') result.build_milestone ??= 'success'
+    if (runStatus?.status === 'done') {
+      result.build_milestone ??= 'success'
+      result.milestone_demo ??= 'success'
+      result.next_milestone ??= 'success'
+    }
+    // Parked at the milestone gate means this milestone's build and demo both finished — the
+    // gate interrupts *before* `next_milestone`, so that one hasn't run for this round.
+    if (runStatus?.next_gate === 'after_milestone') {
+      result.build_milestone ??= 'success'
+      result.milestone_demo ??= 'success'
+    }
     if (runStatus?.status === 'failed') {
       // the exact failing node is ambiguous from status alone — attribute it to whichever node
       // has no success status yet, so at least one node visibly flags the problem.
@@ -137,6 +173,44 @@ export default function PipelinePage() {
     await refreshStatus()
   }
 
+  const atMilestoneGate =
+    runStatus?.status === 'paused_at_gate' && runStatus.next_gate === 'after_milestone'
+
+  // `fitView` on <ReactFlow> only fits once, at mount. Everything that can appear *around* the
+  // canvas afterwards — the milestone gate banner above it, the Milestones panel beside it —
+  // shrinks the pane without React Flow re-fitting, which leaves the nodes rendered correctly but
+  // scrolled clean out of view: a blank dotted canvas that only comes back on a page reload.
+  // Caught by screenshotting the gate state; the build and the lint were both perfectly happy.
+  //
+  // Observing the pane's own size rather than listing the state changes that can affect it: the
+  // list was wrong once already (an effect keyed on `atMilestoneGate` fires before the browser has
+  // laid the new size out, so it re-fits to the size it's trying to replace), and a ResizeObserver
+  // can't go stale as more panels get added. `requestAnimationFrame` defers the fit to after
+  // layout, and ResizeObserver only fires once the new size is real.
+  useEffect(() => {
+    const pane = paneRef.current
+    if (!pane) return
+    let frame = 0
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => flow.current?.fitView({ padding: 0.2 }))
+    })
+    observer.observe(pane)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
+  }, [])
+
+  async function submitChangeRequest(text: string) {
+    if (!projectId) return
+    await api.POST('/runs/{run_id}/control', {
+      params: { path: { run_id: projectId } },
+      body: { action: 'change_request', text },
+    })
+    await refreshStatus()
+  }
+
   const nodeCalls = selected ? calls.filter((c) => matchesNode(c.node, selected)) : []
 
   return (
@@ -153,7 +227,7 @@ export default function PipelinePage() {
             <PlayIcon className="size-4" /> Start run
           </Button>
         )}
-        {runStatus?.status === 'paused_at_gate' && (
+        {runStatus?.status === 'paused_at_gate' && runStatus.next_gate !== 'after_milestone' && (
           <div className="flex items-center gap-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2">
             <span className="text-sm">
               Paused at gate <Badge variant="warning">{runStatus.next_gate}</Badge>
@@ -170,12 +244,25 @@ export default function PipelinePage() {
         )}
       </div>
 
-      <div className="flex flex-1">
-        <div className="flex-1">
+      {atMilestoneGate && (
+        <div className="border-b p-4">
+          <MilestoneGate
+            changeRequests={changeRequests}
+            onSubmitChangeRequest={submitChangeRequest}
+            onApprove={approveGate}
+          />
+        </div>
+      )}
+
+      <div className="flex flex-1 overflow-hidden">
+        <div ref={paneRef} className="flex-1">
           <ReactFlow
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
+            onInit={(instance) => {
+              flow.current = instance
+            }}
             onNodeClick={(_, node) => setSelected(node.id)}
             fitView
             proOptions={{ hideAttribution: true }}
@@ -185,8 +272,18 @@ export default function PipelinePage() {
           </ReactFlow>
         </div>
 
-        {selected && (
-          <Card className="w-80 shrink-0 overflow-y-auto rounded-none border-l border-y-0 border-r-0">
+        <div className="flex w-80 shrink-0 flex-col overflow-hidden border-l">
+          <Card className="flex max-h-1/2 flex-col overflow-hidden rounded-none border-0">
+            <CardHeader>
+              <CardTitle className="text-sm">Milestones</CardTitle>
+            </CardHeader>
+            <CardContent className="overflow-y-auto">
+              <MilestoneRail milestones={milestones} currentIndex={currentIndex} />
+            </CardContent>
+          </Card>
+
+          {selected && (
+          <Card className="flex flex-1 flex-col overflow-y-auto rounded-none border-0 border-t">
             <CardHeader>
               <CardTitle className="text-sm">{NODE_LABEL[selected] ?? selected}</CardTitle>
             </CardHeader>
@@ -210,13 +307,18 @@ export default function PipelinePage() {
               )}
             </CardContent>
           </Card>
-        )}
+          )}
+        </div>
       </div>
     </div>
   )
 }
 
 function matchesNode(callNode: string, selectedNode: string): boolean {
+  // `milestone_demo` and `next_milestone` make no LLM calls at all, by design — every fact on a
+  // MilestoneDemo is something the engine already knows for certain, so there's nothing for a
+  // model to be asked. Their inspector panel being empty is correct, not a gap.
+  if (selectedNode === 'milestone_demo' || selectedNode === 'next_milestone') return false
   if (selectedNode === 'build_milestone') return callNode !== 'ba' && callNode !== 'sa'
   return callNode === selectedNode
 }

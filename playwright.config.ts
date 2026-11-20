@@ -7,7 +7,10 @@ import { defineConfig } from '@playwright/test'
  */
 export default defineConfig({
   testDir: './e2e',
-  timeout: 90_000,
+  // M7 added a second gate to the scenario, and reaching it means a real component build
+  // (subprocess scaffolding, ruff/mypy/pytest gates) has to finish first — that's the bulk of
+  // the budget here, not anything the UI does.
+  timeout: 300_000,
   fullyParallel: false,
   workers: 1,
   reporter: [['list']],

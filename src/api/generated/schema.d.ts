@@ -142,6 +142,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/runs/{run_id}/milestones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Milestones
+         * @description The milestone plan and how far through it the run is — what the Pipeline screen needs to
+         *     show the milestone loop rather than a single build (spec section 9, screen 3).
+         *
+         *     Progress is read from stored `MilestoneReport` versions rather than from the run's in-memory
+         *     graph state, so it's still answerable after an engine restart, when `RunManager` knows nothing
+         *     about the run at all.
+         */
+        get: operations["get_run_milestones_runs__run_id__milestones_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/runs/{run_id}/artifacts": {
         parameters: {
             query?: never;
@@ -149,7 +174,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Run Artifacts */
+        /**
+         * List Run Artifacts
+         * @description Every artifact at its latest version, each carrying its stale marker (M7).
+         *
+         *     Staleness is joined in here rather than offered as a separate endpoint because it's never
+         *     useful on its own: "which artifacts are stale" is only ever asked while rendering the artifact
+         *     list, and a second request would let the two answers disagree.
+         */
         get: operations["list_run_artifacts_runs__run_id__artifacts_get"];
         put?: never;
         post?: never;
@@ -166,7 +198,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Artifact */
+        /**
+         * Get Artifact
+         * @description One artifact's content, at `version` or (by default) its latest.
+         *
+         *     The `version` parameter arrived with M7. Before it, every artifact in practice had exactly one
+         *     version, so "latest" was the only answer there was — and the Artifacts screen's version picker
+         *     was quietly inert, re-fetching the latest whichever version you chose. M7 is the first
+         *     milestone that genuinely produces v2s (a change request re-runs the BA and SA), which turns
+         *     that from a harmless stub into a screen that shows the wrong data while looking right.
+         */
         get: operations["get_artifact_runs__run_id__artifacts__kind___artifact_id__get"];
         put?: never;
         post?: never;
@@ -313,6 +354,16 @@ export interface components {
             produced_by: string;
             /** Created At */
             created_at: string;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /**
+             * Stale Reason
+             * @default
+             */
+            stale_reason: string;
         };
         /** ArtifactVersionsResponse */
         ArtifactVersionsResponse: {
@@ -322,6 +373,24 @@ export interface components {
             id: string;
             /** Versions */
             versions: number[];
+        };
+        /** ChangeRequestSummary */
+        ChangeRequestSummary: {
+            /** Id */
+            id: string;
+            /** Version */
+            version: number;
+            /** Text */
+            text: string;
+            /** Raised At Milestone Id */
+            raised_at_milestone_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "applied";
+            /** Created At */
+            created_at: string;
         };
         /** CreateProjectRequest */
         CreateProjectRequest: {
@@ -396,6 +465,51 @@ export interface components {
              * @default false
              */
             container_execution: boolean;
+        };
+        /**
+         * MilestoneProgress
+         * @description One milestone's place in the run: what the BA planned, which components it needs, and how
+         *     its build turned out (absent for a milestone that hasn't been built yet).
+         */
+        MilestoneProgress: {
+            /** Index */
+            index: number;
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Demo Description */
+            demo_description: string;
+            /** Requirement Ids */
+            requirement_ids: string[];
+            /** Component Ids */
+            component_ids: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "ready" | "failed";
+            /**
+             * Unresolved Bug Count
+             * @default 0
+             */
+            unresolved_bug_count: number;
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+        };
+        /** MilestonesResponse */
+        MilestonesResponse: {
+            /** Run Id */
+            run_id: string;
+            /** Current Index */
+            current_index: number;
+            /** Milestones */
+            milestones: components["schemas"]["MilestoneProgress"][];
+            /** Change Requests */
+            change_requests: components["schemas"]["ChangeRequestSummary"][];
         };
         /**
          * ModelProfile
@@ -515,9 +629,11 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "approve_gate" | "pause" | "resume" | "stop" | "retry_node" | "restart_from_node";
+            action: "approve_gate" | "change_request" | "pause" | "resume" | "stop" | "retry_node" | "restart_from_node";
             /** Node */
             node?: string | null;
+            /** Text */
+            text?: string | null;
         };
         /** RunControlResponse */
         RunControlResponse: {
@@ -908,6 +1024,37 @@ export interface operations {
             };
         };
     };
+    get_run_milestones_runs__run_id__milestones_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MilestonesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_run_artifacts_runs__run_id__artifacts_get: {
         parameters: {
             query?: never;
@@ -941,7 +1088,9 @@ export interface operations {
     };
     get_artifact_runs__run_id__artifacts__kind___artifact_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                version?: number | null;
+            };
             header?: never;
             path: {
                 kind: string;

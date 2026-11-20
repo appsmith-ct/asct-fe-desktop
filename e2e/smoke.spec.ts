@@ -6,6 +6,13 @@ import { expect, test } from '@playwright/test'
  * what just happened. Whether the full component build finishes successfully isn't asserted —
  * "run inspection" works the same either way (see the engine's `ScenarioFakeChatModel` docstring
  * and the M6 plan doc's scope note) — but on this exact scripted scenario it reliably does.
+ *
+ * Extended for M7's own acceptance half: after the SA gate, the run reaches the *milestone demo*
+ * gate, where the UI offers a change request as well as approval. The scripted fake model returns
+ * the same content on every call, so this can't assert that the architecture *changed* (that's
+ * `tests/test_milestone_loop.py`, engine-side, where a genuinely different second pass is
+ * scripted) — what it proves is that the loop's pause is reachable and the change request
+ * actually lands through the UI.
  */
 test('chat, gate approval and run inspection', async ({ page }, testInfo) => {
   // A unique name every run, under a scratch workspace path rather than the engine's default
@@ -59,9 +66,32 @@ test('chat, gate approval and run inspection', async ({ page }, testInfo) => {
   await page.getByRole('button', { name: 'Approve' }).click()
   await expect(page.getByText('Paused at gate')).not.toBeVisible()
 
+  // -- M7: the milestone demo pause, with its change-request control ----------------------
+  // A different control from the plain gate banner above, deliberately (see MilestoneGate):
+  // this gate is a conversation, not a yes/no.
+  // Waits for the gate's own distinctive sentence, not the "milestone demo" badge: `getByText`
+  // with a string is a case-insensitive *substring* match, so "milestone demo" also matches the
+  // React Flow node labelled "Milestone demo" and would pass the instant the graph renders,
+  // long before the milestone has actually been built.
+  await expect(page.getByText('This milestone is built.')).toBeVisible({ timeout: 150_000 })
+  await expect(page.getByText('milestone demo', { exact: true })).toBeVisible()
+
+  // The milestone rail shows the BA's plan and which milestone is signed off.
+  await expect(page.getByText('Milestones', { exact: true })).toBeVisible()
+
+  await page.getByPlaceholder(/Want something changed/).fill('it should also support refunds')
+  await page.getByRole('button', { name: 'Request change' }).click()
+  // Recorded, listed, and the run is still parked — submitting doesn't resume it, so a user can
+  // raise several before approving.
+  await expect(page.getByText('CR-001')).toBeVisible()
+  await expect(page.getByText('it should also support refunds')).toBeVisible()
+  await expect(page.getByRole('button', { name: /Approve and apply 1 change/ })).toBeVisible()
+
+  await page.getByRole('button', { name: /Approve and apply 1 change/ }).click()
+
   // -- Run inspection: give the (real, subprocess-backed) component build a while to finish,
   // then confirm the Runs and Artifacts screens show real data regardless of its outcome.
-  await page.waitForTimeout(5_000)
+  await page.waitForTimeout(8_000)
 
   await page.getByRole('link', { name: 'Runs & metrics' }).click()
   await expect(page.getByText(/\d+ call\(s\)/)).toBeVisible()
@@ -73,4 +103,9 @@ test('chat, gate approval and run inspection', async ({ page }, testInfo) => {
   await expect(page.getByText('Architecture')).toBeVisible()
   await page.getByText('Architecture').click()
   await expect(page.getByText(`"id": "${projectId}"`)).toBeVisible()
+
+  // M7's artifacts reach the screen too: the milestone demo record, and the change request the
+  // user raised, both stored as real versioned artifacts rather than run-local state.
+  await expect(page.getByText('MilestoneDemo')).toBeVisible()
+  await expect(page.getByText('ChangeRequest')).toBeVisible()
 })

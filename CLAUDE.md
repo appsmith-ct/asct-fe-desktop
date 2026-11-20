@@ -14,6 +14,13 @@ plain local web app in the browser — that's an accepted dev mode, not a shortc
 
 ## Conventions
 
+- **Commit without asking.** The user has given standing permission to commit at your own
+  judgement. Commit when a coherent piece of work is finished and verified (`pnpm build`, `pnpm lint`,
+  and `pnpm run e2e` where it's affected — all green), not mid-change, with an imperative subject and a short
+  body explaining *why*, plus a `Co-Authored-By` trailer. Straight to `main`, matching this
+  repo's existing linear history. After committing here, remember the **root repo's submodule
+  pointer** needs its own commit in `asct-app` — a submodule commit alone leaves the root
+  pointing at the old revision. Pushing is still a separate decision: ask before `git push`.
 - `pnpm`, not `npm`/`yarn`.
 - The engine is the source of truth for API shape: its OpenAPI document and event schema are exported to
   `asct-app/docs/api/`, and this repo's TypeScript client (`pnpm run gen-api`, `src/api/generated/`) is
@@ -52,10 +59,26 @@ plain local web app in the browser — that's an accepted dev mode, not a shortc
   loop, not a one-off from M6: after a UI change, screenshot the affected screen and look at it, the same
   way you'd eyeball it in a real browser. It already caught several real bugs (see M6's plan doc) that
   `pnpm build`/`pnpm lint` passing cleanly did not.
+- `<ReactFlow fitView>` fits **once, at mount**, and never again. Anything that appears around the
+  canvas afterwards (the milestone gate banner above it, the Milestones panel beside it) shrinks the
+  pane without a re-fit, leaving the nodes correctly rendered but scrolled out of view — a blank
+  dotted canvas that only comes back on a page reload. `Pipeline.tsx` re-fits from a `ResizeObserver`
+  on the pane element, deferred one `requestAnimationFrame`. Observe the pane rather than listing the
+  state changes that can resize it: an effect keyed on `atMilestoneGate` was tried first and fires
+  *before* the browser lays the new size out, so it re-fits to the size it's trying to replace.
+  Found by screenshotting the gate state; `pnpm build` and `pnpm lint` were both perfectly happy.
+- Playwright's `getByText('some text')` is a **case-insensitive substring** match. In `e2e/`, assert
+  on a distinctive full sentence, or pass `{ exact: true }` — the milestone gate's "milestone demo"
+  badge also matches the React Flow node labelled "Milestone demo", which made an assertion pass
+  instantly against the wrong element and the next one fail for no visible reason.
 
 ## Build order
 
 This repo is built milestone by milestone against the spec's section 10. M6 built the full REST/WebSocket
 API and all seven screens (Projects, Chat, Pipeline, Artifacts, Workspace, Runs and metrics, Settings).
-M7 (milestone loop, change requests) and M8 (Tauri shell, Model Manager) are not built yet — don't jump
-ahead to either without a concrete reason tied to that milestone's own work.
+M7 added the milestone loop's UI: the Pipeline screen's Milestones panel (`MilestoneRail`), the milestone
+demo pause with its change-request control (`MilestoneGate`), stale markers on the Artifacts screen, and a
+version picker that actually loads the chosen version (the engine's artifact endpoint gained a `version`
+query parameter — before M7 nothing ever had a v2, so the picker had been quietly inert). M8 (Tauri shell,
+Model Manager) is not built yet — don't jump ahead without a concrete reason tied to that milestone's own
+work.

@@ -1,3 +1,4 @@
+import { AlertTriangleIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 
@@ -12,6 +13,11 @@ type ArtifactSummary = {
   version: number
   produced_by: string
   created_at: string
+  // M7: set when something upstream changed after this artifact was built — a change request
+  // revising a component's spec is the one that happens in practice. `stale_reason` names the
+  // change request, so the badge can explain itself without a second request.
+  stale?: boolean
+  stale_reason?: string
 }
 
 export default function ArtifactsPage() {
@@ -40,10 +46,13 @@ export default function ArtifactsPage() {
     await loadContent(artifact.kind, artifact.id)
   }
 
-  async function loadContent(kind: string, id: string) {
+  async function loadContent(kind: string, id: string, wanted?: number) {
     if (!projectId) return
     const { data } = await api.GET('/runs/{run_id}/artifacts/{kind}/{artifact_id}', {
-      params: { path: { run_id: projectId, kind, artifact_id: id } },
+      params: {
+        path: { run_id: projectId, kind, artifact_id: id },
+        query: wanted === undefined ? {} : { version: wanted },
+      },
     })
     setContent((data as Record<string, unknown>) ?? null)
   }
@@ -70,6 +79,11 @@ export default function ArtifactsPage() {
               <span className="flex items-center gap-2">
                 {artifact.id}
                 <Badge variant="outline">v{artifact.version}</Badge>
+                {artifact.stale && (
+                  <Badge variant="warning" title={artifact.stale_reason}>
+                    stale
+                  </Badge>
+                )}
               </span>
             </button>
           ))}
@@ -86,7 +100,7 @@ export default function ArtifactsPage() {
               value={String(version)}
               onValueChange={(v) => {
                 setVersion(Number(v))
-                void loadContent(selected.kind, selected.id)
+                void loadContent(selected.kind, selected.id, Number(v))
               }}
             >
               <SelectTrigger className="w-28">
@@ -102,7 +116,17 @@ export default function ArtifactsPage() {
             </Select>
           )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          {selected?.stale && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 text-xs">
+              <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
+              <span>
+                <span className="font-medium">Stale.</span>{' '}
+                {selected.stale_reason || 'Something upstream changed after this was built.'} It
+                will be rebuilt by the next milestone to run.
+              </span>
+            </div>
+          )}
           {content ? (
             <pre className="overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
               {JSON.stringify(content, null, 2)}
