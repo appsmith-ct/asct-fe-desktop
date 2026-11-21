@@ -544,6 +544,8 @@ export interface components {
             temperature: number;
             /** Max Tokens */
             max_tokens?: number | null;
+            /** Request Timeout */
+            request_timeout?: number | null;
             /** Thinking */
             thinking?: boolean | null;
         };
@@ -668,6 +670,29 @@ export interface components {
             /** By Role */
             by_role: components["schemas"]["RoleMetricsResponse"][];
         };
+        /**
+         * RunNodeState
+         * @description One graph node's progress, as the run has actually observed it.
+         *
+         *     Carried on `GET /runs/{id}` so "where is this run now?" is answerable over REST and not only
+         *     by having watched the live event stream from the start. Before this, the Pipeline screen
+         *     reconstructed node state purely from `node_started`/`node_finished` frames as they arrived:
+         *     opening the screen after a node had started, or refreshing the page, left every node drawn as
+         *     idle for the whole minutes-long call.
+         */
+        RunNodeState: {
+            /** Node */
+            node: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "success" | "failed";
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+        };
         /** RunStatusResponse */
         RunStatusResponse: {
             /** Run Id */
@@ -676,7 +701,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "running" | "paused_at_gate" | "done" | "failed";
+            status: "running" | "paused_at_gate" | "done" | "failed" | "stopped";
             /** Next Gate */
             next_gate?: string | null;
             /** Error */
@@ -685,6 +710,13 @@ export interface components {
             result?: {
                 [key: string]: unknown;
             } | null;
+            /** Nodes */
+            nodes?: components["schemas"]["RunNodeState"][];
+            /**
+             * Stop Requested
+             * @default false
+             */
+            stop_requested: boolean;
         };
         /** StartRunResponse */
         StartRunResponse: {

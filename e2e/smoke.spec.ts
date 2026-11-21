@@ -59,12 +59,18 @@ test('chat, gate approval and run inspection', async ({ page }, testInfo) => {
   await page.getByRole('button', { name: 'Start build' }).click()
   await page.waitForURL(/\/pipeline/)
 
-  await expect(page.getByText('Paused at gate')).toBeVisible({ timeout: 30_000 })
+  // ISSUE-9: the gate names what it's asking for and shows what was just produced, instead of
+  // the raw gate id and a bare Approve button ("Paused at gate after_sa / Approve" was the
+  // banner's entire text content). The gate id is still on screen, as a hint beside the title.
+  await expect(page.getByText('Approve the architecture')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByText('after_sa')).toBeVisible()
+  await expect(page.getByText(/Components:/)).toBeVisible()
+  // Both halves of what's being approved: the architecture itself, and the BA plan it answers.
+  await expect(page.getByText(/milestone\(s\),/)).toBeVisible()
 
   // -- Gate approval -----------------------------------------------------------------------
-  await page.getByRole('button', { name: 'Approve' }).click()
-  await expect(page.getByText('Paused at gate')).not.toBeVisible()
+  await page.getByRole('button', { name: 'Approve and continue' }).click()
+  await expect(page.getByText('Approve the architecture')).not.toBeVisible()
 
   // -- M7: the milestone demo pause, with its change-request control ----------------------
   // A different control from the plain gate banner above, deliberately (see MilestoneGate):
@@ -84,7 +90,13 @@ test('chat, gate approval and run inspection', async ({ page }, testInfo) => {
   // Recorded, listed, and the run is still parked — submitting doesn't resume it, so a user can
   // raise several before approving.
   await expect(page.getByText('CR-001')).toBeVisible()
-  await expect(page.getByText('it should also support refunds')).toBeVisible()
+  // Scoped to the list item on purpose. `getByText` also matches the textarea's own value, so
+  // the unscoped version was really asserting two things at once — "it's in the list" and "the
+  // draft box has been cleared" — and failed as ambiguous whenever the clear lagged the list.
+  await expect(
+    page.getByRole('listitem').filter({ hasText: 'it should also support refunds' }),
+  ).toBeVisible()
+  await expect(page.getByPlaceholder(/Want something changed/)).toHaveValue('')
   await expect(page.getByRole('button', { name: /Approve and apply 1 change/ })).toBeVisible()
 
   await page.getByRole('button', { name: /Approve and apply 1 change/ }).click()
