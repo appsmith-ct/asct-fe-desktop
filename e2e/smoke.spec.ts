@@ -72,6 +72,16 @@ test('chat, gate approval and run inspection', async ({ page }, testInfo) => {
   await page.getByRole('button', { name: 'Approve and continue' }).click()
   await expect(page.getByText('Approve the architecture')).not.toBeVisible()
 
+  // ISSUE-7: `build_milestone` opens into the steps it actually is — the per-component chain
+  // (Tech Lead plan, scaffold, tasks, e2e, handoff) and the milestone-level steps after it.
+  // Published by the engine from inside the milestone flow, which used to publish nothing.
+  await expect(page.getByText('Tech Lead plan')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText('Integrate', { exact: true })).toBeVisible()
+  // Worth asserting *visibility* rather than mere presence: React Flow leaves a node
+  // `visibility: hidden` until it has measured it, and hands rebuilt nodes back to the measurer
+  // — so a `nodes` array recreated on every render (a 3s status poll makes that often) leaves
+  // the graph invisible in beats. This assertion is what caught that.
+
   // -- M7: the milestone demo pause, with its change-request control ----------------------
   // A different control from the plain gate banner above, deliberately (see MilestoneGate):
   // this gate is a conversation, not a yes/no.

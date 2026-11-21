@@ -12,17 +12,20 @@ import {
 import '@xyflow/react/dist/style.css'
 import {
   CheckCircle2Icon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CircleDashedIcon,
   Loader2Icon,
   PlayIcon,
   SquareIcon,
   XCircleIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { api } from '@/api/client'
-import { useRunEvents } from '@/api/useRunEvents'
+import { type LiveStep, stepKey, useRunEvents } from '@/api/useRunEvents'
+import { LiveTurn } from '@/components/LiveTurn'
 import { GateBanner } from '@/components/GateBanner'
 import { MilestoneGate, type ChangeRequestSummary } from '@/components/MilestoneGate'
 import { MilestoneRail, type MilestoneProgress } from '@/components/MilestoneRail'
@@ -44,6 +47,29 @@ const NODE_LABEL: Record<string, string> = {
   next_milestone: 'Next milestone',
 }
 
+// What `build_milestone` actually is, per component and then per milestone. The engine
+// publishes these as steps parented to `build_milestone` (`appsmith.core.step_observer`); the
+// static shape is listed here so the whole subgraph is visible before the run reaches it, which
+// is also what `GET /runs/{id}/milestones` makes possible by naming each milestone's components.
+const COMPONENT_STEP_ORDER = ['tl_plan', 'scaffold', 'process_tasks', 'component_e2e', 'handoff']
+const MILESTONE_STEP_ORDER = ['integrate_stage', 'stage_components', 'qa', 'triage_bugs']
+const STEP_LABEL: Record<string, string> = {
+  tl_plan: 'Tech Lead plan',
+  scaffold: 'Scaffold',
+  process_tasks: 'Tasks',
+  component_e2e: 'Component E2E',
+  handoff: 'Handoff',
+  integrate_stage: 'Integrate',
+  stage_components: 'Stage',
+  qa: 'QA',
+  triage_bugs: 'Triage bugs',
+}
+
+function stepLabel(node: string): string {
+  if (node.startsWith('task:')) return `Task ${node.slice('task:'.length)}`
+  return STEP_LABEL[node] ?? node
+}
+
 type Status = 'idle' | 'running' | 'success' | 'failed'
 
 /** Per-node progress as `GET /runs/{id}` reports it — the engine accumulates this from the same
@@ -53,6 +79,10 @@ type Status = 'idle' | 'running' | 'success' | 'failed'
 type RunNodeState = {
   node: string
   status: 'running' | 'success' | 'failed'
+  // Set for the steps *inside* `build_milestone` — the per-component chain and the
+  // integrate/stage/QA steps after it. `null` for the project graph's own five nodes.
+  parent?: string | null
+  component_id?: string | null
   started_at?: string | null
   finished_at?: string | null
 }
@@ -68,7 +98,16 @@ type RunStatus = {
   stop_requested: boolean
 }
 
-function PipelineNode({ data, selected }: NodeProps<Node<{ label: string; status: Status }>>) {
+type PipelineNodeData = {
+  label: string
+  status: Status
+  sublabel?: string
+  sub?: boolean
+  expanded?: boolean
+  onToggle?: () => void
+}
+
+function PipelineNode({ data, selected }: NodeProps<Node<PipelineNodeData>>) {
   const icon = {
     idle: <CircleDashedIcon className="size-4 text-muted-foreground" />,
     running: <Loader2Icon className="size-4 animate-spin text-primary" />,
@@ -83,13 +122,40 @@ function PipelineNode({ data, selected }: NodeProps<Node<{ label: string; status
   return (
     <div
       className={
-        'flex min-w-44 items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm ' +
+        'flex items-center gap-2 rounded-lg border bg-card shadow-sm ' +
+        (data.sub ? 'min-w-36 px-2 py-1 ' : 'min-w-44 px-3 py-2 ') +
         (selected ? 'border-primary ring-2 ring-primary/40' : '')
       }
     >
       <Handle type="target" position={Position.Left} />
       {icon}
-      <span className="text-sm font-medium">{data.label}</span>
+      <div className="flex flex-col">
+        <span className={data.sub ? 'text-xs font-medium' : 'text-sm font-medium'}>
+          {data.label}
+        </span>
+        {data.sublabel && (
+          <span className="font-mono text-[10px] text-muted-foreground">{data.sublabel}</span>
+        )}
+      </div>
+      {data.onToggle && (
+        // `stopPropagation` so expanding the box isn't also a click on the node: React Flow
+        // would otherwise select `build_milestone` every time someone opened or closed it.
+        <button
+          type="button"
+          aria-label={data.expanded ? 'Collapse build steps' : 'Expand build steps'}
+          className="ml-1 rounded p-0.5 text-muted-foreground hover:bg-muted"
+          onClick={(event) => {
+            event.stopPropagation()
+            data.onToggle?.()
+          }}
+        >
+          {data.expanded ? (
+            <ChevronDownIcon className="size-4" />
+          ) : (
+            <ChevronRightIcon className="size-4" />
+          )}
+        </button>
+      )}
       <Handle type="source" position={Position.Right} />
     </div>
   )
@@ -116,6 +182,7 @@ function useElapsed(startedAt: string | null | undefined): string | null {
 
 function RunningIndicator({ node }: { node: RunNodeState | null }) {
   const elapsed = useElapsed(node?.started_at)
+  const label = node ? (NODE_LABEL[node.node] ?? stepLabel(node.node)) : null
 
   return (
     <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-2">
@@ -123,7 +190,10 @@ function RunningIndicator({ node }: { node: RunNodeState | null }) {
       <span className="text-sm">
         {node ? (
           <>
-            Running <span className="font-medium">{NODE_LABEL[node.node] ?? node.node}</span>
+            Running <span className="font-medium">{label}</span>
+            {node.component_id ? (
+              <span className="font-mono text-xs text-muted-foreground"> {node.component_id}</span>
+            ) : null}
             {elapsed ? <span className="text-muted-foreground"> · {elapsed}</span> : null}
           </>
         ) : (
@@ -136,12 +206,16 @@ function RunningIndicator({ node }: { node: RunNodeState | null }) {
 
 export default function PipelinePage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { nodeStatus: liveStatus } = useRunEvents(projectId ?? null)
+  const { steps: liveSteps, live } = useRunEvents(projectId ?? null)
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null)
   const [milestones, setMilestones] = useState<MilestoneProgress[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [changeRequests, setChangeRequests] = useState<ChangeRequestSummary[]>([])
   const [selected, setSelected] = useState<string | null>(null)
+  // `build_milestone` is a whole graph drawn as one box; this opens it. Expanded by default —
+  // the reason it was one box was that the engine published nothing from inside it, not that
+  // anyone wanted it hidden — and it costs nothing when there are no steps to show yet.
+  const [expanded, setExpanded] = useState(true)
   const flow = useRef<ReactFlowInstance | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const [calls, setCalls] = useState<
@@ -217,6 +291,24 @@ export default function PipelinePage() {
     void refreshCalls(node)
   }
 
+  /** Every step the run has reported, keyed the way the engine keys them: REST first (always
+   * answerable, survives a refresh), the live event feed layered over it (fresher between the
+   * 3s polls). They are built from the same events, so they agree.
+   */
+  const stepStates: Record<string, LiveStep> = useMemo(() => {
+    const merged: Record<string, LiveStep> = {}
+    for (const node of runStatus?.nodes ?? []) {
+      merged[stepKey(node.node, node.component_id)] = {
+        node: node.node,
+        status: node.status,
+        parent: node.parent ?? null,
+        componentId: node.component_id ?? null,
+        startedAt: node.started_at ?? null,
+      }
+    }
+    return { ...merged, ...liveSteps }
+  }, [runStatus, liveSteps])
+
   const resolvedStatus: Record<string, Status> = useMemo(() => {
     // Plain `||=` doesn't work here: every node already defaults to the *truthy* string 'idle'
     // before these fallbacks run, so `result.ba ||= 'success'` would never actually fire. Keep
@@ -228,8 +320,9 @@ export default function PipelinePage() {
     // between two 3s polls. The fallbacks below are what's left of the era when the WS feed was
     // the *only* source — they now only matter for a run whose engine restarted mid-flight.
     const result: Partial<Record<string, Status>> = {}
-    for (const node of runStatus?.nodes ?? []) result[node.node] = node.status
-    Object.assign(result, liveStatus)
+    for (const step of Object.values(stepStates)) {
+      if (!step.parent) result[step.node] = step.status
+    }
     // ba/sa already ran if we're paused at (or past) the after_sa gate, even on a page refresh
     // where the WS live feed never saw it happen — the one thing the event stream can't tell us
     // after the fact, `GET /runs/{id}` can.
@@ -255,28 +348,115 @@ export default function PipelinePage() {
       if (firstUnresolved) result[firstUnresolved] ??= 'failed'
     }
     return Object.fromEntries(NODE_ORDER.map((node) => [node, result[node] ?? 'idle']))
-  }, [liveStatus, runStatus])
+  }, [stepStates, runStatus])
 
   // Which node to name in the header. The engine reports the one that's actually running; if the
   // run is between nodes (or the report hasn't arrived yet) there simply isn't one to name, and
   // saying so beats guessing.
-  const runningNode = useMemo(() => {
-    const running = (runStatus?.nodes ?? []).filter((node) => node.status === 'running')
-    return running.length > 0 ? running[running.length - 1] : null
-  }, [runStatus])
+  const runningNode = useMemo((): RunNodeState | null => {
+    const running = Object.values(stepStates).filter((step) => step.status === 'running')
+    if (running.length === 0) return null
+    // The deepest one: while `tl_plan` for the backend is running, so is `build_milestone`, and
+    // "Running Build milestone" for twenty minutes is the uninformative half of that pair.
+    const deepest = running.find((step) => step.parent) ?? running[running.length - 1]
+    return {
+      node: deepest.node,
+      status: 'running',
+      parent: deepest.parent,
+      component_id: deepest.componentId,
+      started_at: deepest.startedAt,
+    }
+  }, [stepStates])
 
-  const nodes: Node[] = NODE_ORDER.map((id, i) => ({
-    id,
-    type: 'pipeline',
-    position: { x: i * 220, y: 80 },
-    data: { label: NODE_LABEL[id], status: resolvedStatus[id] },
-    selected: id === selected,
-  }))
-  const edges: Edge[] = NODE_ORDER.slice(0, -1).map((id, i) => ({
-    id: `${id}-${NODE_ORDER[i + 1]}`,
-    source: id,
-    target: NODE_ORDER[i + 1],
-  }))
+  /** The rows that make up `build_milestone`: one per component in this milestone's scope, then
+   * one for the milestone-level steps that follow them.
+   *
+   * Each row is the canonical step order with whatever the run has actually reported layered on
+   * top, so the shape is visible before the run gets there — and tasks, which only exist once
+   * the Tech Lead has planned them, are inserted after `process_tasks` as they appear.
+   */
+  const subRows = useMemo(() => {
+    const observed = Object.values(stepStates).filter((step) => step.parent === 'build_milestone')
+    const componentIds =
+      milestones[currentIndex]?.component_ids.length
+        ? milestones[currentIndex].component_ids
+        : [...new Set(observed.map((s) => s.componentId).filter((id): id is string => !!id))]
+
+    const tasksFor = (componentId: string) =>
+      observed
+        .filter((step) => step.componentId === componentId && step.node.startsWith('task:'))
+        .sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''))
+        .map((step) => step.node)
+
+    const rows = componentIds.map((componentId) => ({
+      componentId,
+      steps: COMPONENT_STEP_ORDER.flatMap((step) =>
+        step === 'process_tasks' ? [step, ...tasksFor(componentId)] : [step],
+      ),
+    }))
+    return [...rows, { componentId: null, steps: MILESTONE_STEP_ORDER }]
+  }, [stepStates, milestones, currentIndex])
+
+  const showSubgraph = expanded && subRows.some((row) => row.steps.length > 0)
+
+  // Memoised, and `toggleExpanded` with it. React Flow hides a node (`visibility: hidden`)
+  // until it has measured it, and hands rebuilt nodes back to the measurer — so recreating this
+  // array on every render, which a 3s status poll makes often, left nodes invisible for a beat
+  // each time. Caught by dumping node geometry from the smoke test: five nodes at correct
+  // positions, all `visibility: hidden`.
+  const toggleExpanded = useCallback(() => setExpanded((previous) => !previous), [])
+
+  const { nodes, edges } = useMemo(() => {
+    const builtNodes: Node[] = NODE_ORDER.map((id, i) => ({
+      id,
+      type: 'pipeline',
+      position: { x: i * 220, y: 80 },
+      data: {
+        label: NODE_LABEL[id],
+        status: resolvedStatus[id],
+        ...(id === 'build_milestone' ? { expanded, onToggle: toggleExpanded } : {}),
+      },
+      selected: id === selected,
+    }))
+    const builtEdges: Edge[] = NODE_ORDER.slice(0, -1).map((id, i) => ({
+      id: `${id}-${NODE_ORDER[i + 1]}`,
+      source: id,
+      target: NODE_ORDER[i + 1],
+    }))
+
+    if (showSubgraph) {
+      subRows.forEach((row, rowIndex) => {
+        const y = 220 + rowIndex * 90
+        row.steps.forEach((step, stepIndex) => {
+          const key = stepKey(step, row.componentId)
+          builtNodes.push({
+            id: key,
+            type: 'pipeline',
+            position: { x: stepIndex * 200, y },
+            data: {
+              label: stepLabel(step),
+              status: stepStates[key]?.status ?? 'idle',
+              sublabel: row.componentId ?? undefined,
+              sub: true,
+            },
+            selected: key === selected,
+          })
+          if (stepIndex === 0) {
+            builtEdges.push({
+              id: `build_milestone-${key}`,
+              source: 'build_milestone',
+              target: key,
+              style: { strokeDasharray: '4 4' },
+            })
+          } else {
+            const previous = stepKey(row.steps[stepIndex - 1], row.componentId)
+            builtEdges.push({ id: `${previous}-${key}`, source: previous, target: key })
+          }
+        })
+      })
+    }
+    return { nodes: builtNodes, edges: builtEdges }
+  }, [resolvedStatus, selected, expanded, toggleExpanded, showSubgraph, subRows, stepStates])
 
   async function startRun() {
     if (!projectId) return
@@ -333,6 +513,15 @@ export default function PipelinePage() {
     }
   }, [])
 
+  // The pane doesn't resize when `build_milestone` opens into its steps — the graph grows
+  // instead, downwards, past the bottom of a viewport that was fitted to five nodes in a row.
+  // So re-fit when the node count changes too, deferred a frame so React Flow has measured the
+  // new nodes before the fit is computed from their sizes.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => flow.current?.fitView({ padding: 0.2 }))
+    return () => cancelAnimationFrame(frame)
+  }, [nodes.length])
+
   async function submitChangeRequest(text: string) {
     if (!projectId) return
     await api.POST('/runs/{run_id}/control', {
@@ -342,7 +531,14 @@ export default function PipelinePage() {
     await refreshStatus()
   }
 
-  const nodeCalls = selected ? calls.filter((c) => matchesNode(c.node, selected)) : []
+  const selectedStep = selected ? stepStates[selected] : undefined
+  const nodeCalls = selected
+    ? calls.filter((call) =>
+        selectedStep?.parent
+          ? matchesStep(call.node, selectedStep.node)
+          : matchesNode(call.node, selected),
+      )
+    : []
 
   return (
     <div className="flex h-full flex-col">
@@ -444,10 +640,41 @@ export default function PipelinePage() {
             </CardContent>
           </Card>
 
+          {/* ISSUE-6: what the model is saying, as it says it. A single call legitimately takes
+              minutes (211 seconds, measured), so a spinner alone cannot tell "thinking hard"
+              from "hung" — the arriving text, and the ticking tokens/elapsed row under it, can.
+              The same component the Chat screen streams its intake turns through. */}
+          {live && (
+            <Card className="flex max-h-1/2 flex-col overflow-hidden rounded-none border-0 border-t">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  Live
+                  <span className="font-mono text-xs font-normal text-muted-foreground">
+                    {live.node} · {live.role}
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="overflow-y-auto">
+                <LiveTurn
+                  reasoning={live.reasoning}
+                  content={live.content}
+                  startedAt={live.startedAt}
+                />
+              </CardContent>
+            </Card>
+          )}
+
           {selected && (
           <Card className="flex flex-1 flex-col overflow-y-auto rounded-none border-0 border-t">
             <CardHeader>
-              <CardTitle className="text-sm">{NODE_LABEL[selected] ?? selected}</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                {NODE_LABEL[selected] ?? stepLabel(selectedStep?.node ?? selected)}
+                {selectedStep?.componentId && (
+                  <span className="font-mono text-xs font-normal text-muted-foreground">
+                    {selectedStep.componentId}
+                  </span>
+                )}
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
               {nodeCalls.length === 0 ? (
@@ -498,6 +725,28 @@ const BUILD_MILESTONE_NODES = new Set([
   'stage_components',
   'fan_out_components',
 ])
+
+/** Which traced calls belong to one step *inside* the milestone flow.
+ *
+ * The engine qualifies a call's node name with the task, role, attempt and review round it
+ * belongs to (`dev_implement:T2:dev_mid:0:review1`), so the step is the part before the first
+ * `:` — except for the two steps that own calls under other names: a task owns every call
+ * naming it, and `qa` owns `qa_test_plan`.
+ *
+ * Calls are not attributed to a *component*: `GET /runs/{id}/llm-calls` unions the per-component
+ * traces into one list without saying which id each came from. With two components, the Tech
+ * Lead plans for both show under either one's `tl_plan`. Fixing that means carrying the trace's
+ * run id out to the API, which is a change to the call-tracing shape, not to this screen.
+ */
+function matchesStep(callNode: string, stepNode: string): boolean {
+  const parts = callNode.split(':')
+  if (stepNode.startsWith('task:')) return parts[1] === stepNode.slice('task:'.length)
+  if (stepNode === 'process_tasks') {
+    return ['dev_implement', 'tl_review', 'replan_task', 'resolve_conflict'].includes(parts[0])
+  }
+  if (stepNode === 'qa') return parts[0] === 'qa_test_plan'
+  return parts[0] === stepNode
+}
 
 function matchesNode(callNode: string, selectedNode: string): boolean {
   // `milestone_demo` and `next_milestone` make no LLM calls at all, by design — every fact on a
